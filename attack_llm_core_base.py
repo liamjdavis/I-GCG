@@ -228,8 +228,28 @@ for i in range(num_steps):
             "user_prompt": user_prompt,
             "adv_suffix": best_new_adv_suffix,
             "gen_str": gen_str,
+            "is_success": is_success,
         }
         log_dict.append(log_entry)
+
+        # If jailbreak is successful, stop attacking
+        if is_success:
+            print(f"\n{'='*80}")
+            print(f"SUCCESS: Jailbreak achieved at step {i}!")
+            print(f"Generated response: {gen_str}")
+            print(f"{'='*80}\n")
+            # Save the logs before breaking
+            submission_json_file = pathlib.Path(f'{args.output_path}/submission/result_{args.id}.json')
+            if not submission_json_file.parent.exists():
+                submission_json_file.parent.mkdir(parents=True)
+            with open(str(submission_json_file.absolute()), 'w') as f:
+                json.dump(generations, f, indent=4)
+            log_json_file = pathlib.Path(f'{args.output_path}/log/result_{args.id}.json')
+            if not log_json_file.parent.exists():
+                log_json_file.parent.mkdir(parents=True)
+            with open(str(log_json_file.absolute()), 'w') as f:
+                json.dump(log_dict, f, indent=4)
+            break
 
         # if current_loss.detach().cpu().numpy()<0.05:
         #     break
