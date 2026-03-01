@@ -1,0 +1,3 @@
+[submodule "smooth-llm"]
+	path = smooth-llm
+	url = https://github.com/arobey1/smooth-llm.git

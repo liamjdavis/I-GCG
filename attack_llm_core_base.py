@@ -8,8 +8,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model_path', type=str, default="/home/LLM/Llama-2-7b-chat-hf")
 parser.add_argument('--device', type=int, default=0)
 parser.add_argument('--id', type=int, default=50)
-parser.add_argument('--defense', type=str, default="without_defense")
+parser.add_argument('--defense', type=str, default="without_defense",
+                    choices=["without_defense", "smooth_llm"])
 parser.add_argument('--behaviors_config', type=str, default="behaviors_ours_config.json")
+parser.add_argument('--smoothllm_pert_type', type=str, default='RandomSwapPerturbation',
+                    choices=['RandomSwapPerturbation', 'RandomPatchPerturbation', 'RandomInsertPerturbation'])
+parser.add_argument('--smoothllm_pert_pct', type=int, default=10)
+parser.add_argument('--smoothllm_num_copies', type=int, default=10)
 parser.add_argument('--output_path', type=str, default=f'./output/{(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime("%Y%m%d-%H%M%S")}')
 
 
@@ -17,6 +22,7 @@ args = parser.parse_args()
 
 
 import os
+import sys
 
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.device)
 import gc
@@ -30,6 +36,13 @@ from llm_attacks.minimal_gcg.opt_utils import token_gradients, sample_control, g
 from llm_attacks.minimal_gcg.opt_utils import load_model_and_tokenizer, get_filtered_cands
 from llm_attacks.minimal_gcg.string_utils import SuffixManager, load_conversation_template
 from llm_attacks import get_nonascii_toks
+
+# SmoothLLM imports (submodule at smooth-llm/)
+_smooth_llm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'smooth-llm')
+if _smooth_llm_path not in sys.path:
+    sys.path.insert(0, _smooth_llm_path)
+from lib.defenses import SmoothLLM
+from lib.attacks import Prompt
 
 # Set the random seed for NumPy
 np.random.seed(20)
@@ -147,6 +160,54 @@ def check_for_attack_success(model, tokenizer, input_ids, assistant_role_slice, 
     return jailbroken,gen_str
 
 
+class WrappedLLM:
+    """Adapter that wraps the existing HF model/tokenizer to match the interface
+    expected by SmoothLLM (callable with a list of prompt strings)."""
+
+    def __init__(self, model, tokenizer, conv_template):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.conv_template = conv_template
+        self.tokenizer.padding_side = 'left'
+
+    def __call__(self, batch, max_new_tokens=100):
+        inputs = self.tokenizer(batch, padding=True, truncation=False, return_tensors='pt')
+        input_ids = inputs['input_ids'].to(self.model.device)
+        attn_mask = inputs['attention_mask'].to(self.model.device)
+        try:
+            outputs = self.model.generate(input_ids, attention_mask=attn_mask,
+                                          max_new_tokens=max_new_tokens)
+        except RuntimeError:
+            return []
+        batch_outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        gen_start_idx = [
+            len(self.tokenizer.decode(input_ids[i], skip_special_tokens=True))
+            for i in range(len(input_ids))
+        ]
+        return [output[gen_start_idx[i]:] for i, output in enumerate(batch_outputs)]
+
+
+def check_for_attack_success_smooth(smooth_defense, full_prompt, perturbable_prompt, max_new_tokens=32):
+    """Run SmoothLLM majority-vote check and return (jailbroken, response_str)."""
+    prompt_obj = Prompt(full_prompt, perturbable_prompt, max_new_tokens)
+    gen_str = smooth_defense(prompt_obj)
+    jailbroken = smooth_defense.is_jailbroken(gen_str)
+    return jailbroken, gen_str
+
+
+# Instantiate SmoothLLM defense if requested
+smooth_llm_defense = None
+if args.defense == 'smooth_llm':
+    wrapped_model = WrappedLLM(model, tokenizer, conv_template)
+    smooth_llm_defense = SmoothLLM(
+        target_model=wrapped_model,
+        pert_type=args.smoothllm_pert_type,
+        pert_pct=args.smoothllm_pert_pct,
+        num_copies=args.smoothllm_num_copies,
+    )
+    print(f'SmoothLLM defense enabled: pert_type={args.smoothllm_pert_type}, '
+          f'pert_pct={args.smoothllm_pert_pct}, num_copies={args.smoothllm_num_copies}')
+
 
 not_allowed_tokens = None if allow_non_ascii else get_nonascii_toks(tokenizer)
 adv_suffix = adv_string_init
@@ -214,11 +275,22 @@ for i in range(num_steps):
         print("best_new_adv_suffix",best_new_adv_suffix)
         # Update the running adv_suffix with the best candidate
         adv_suffix = best_new_adv_suffix
-        is_success,gen_str = check_for_attack_success(model,
-                                              tokenizer,
-                                              suffix_manager.get_input_ids(adv_string=adv_suffix).to(device),
-                                              suffix_manager._assistant_role_slice,
-                                              test_prefixes)
+        if args.defense == 'smooth_llm':
+            check_input_ids = suffix_manager.get_input_ids(adv_string=adv_suffix).to(device)
+            full_prompt_text = tokenizer.decode(
+                check_input_ids[:suffix_manager._assistant_role_slice.stop],
+                skip_special_tokens=True
+            )
+            perturbable_prompt = f"{user_prompt} {adv_suffix}"
+            is_success, gen_str = check_for_attack_success_smooth(
+                smooth_llm_defense, full_prompt_text, perturbable_prompt, max_new_tokens=32
+            )
+        else:
+            is_success,gen_str = check_for_attack_success(model,
+                                                  tokenizer,
+                                                  suffix_manager.get_input_ids(adv_string=adv_suffix).to(device),
+                                                  suffix_manager._assistant_role_slice,
+                                                  test_prefixes)
 
         log_entry = {
             "step": i,
