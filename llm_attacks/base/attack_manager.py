@@ -15,7 +15,12 @@ import torch.nn.functional as F
 from fastchat.model import get_conversation_template
 from transformers import (AutoModelForCausalLM, AutoTokenizer, GPT2LMHeadModel,
                           GPTJForCausalLM, GPTNeoXForCausalLM,
-                          LlamaForCausalLM)
+                          LlamaForCausalLM, MistralForCausalLM)
+# Try to import Qwen2 (may not be available in older transformers)
+try:
+    from transformers import Qwen2ForCausalLM
+except ImportError:
+    Qwen2ForCausalLM = None
 
 
 class NpEncoder(json.JSONEncoder):
@@ -35,6 +40,10 @@ def get_embedding_layer(model):
         return model.model.embed_tokens
     elif isinstance(model, GPTNeoXForCausalLM):
         return model.base_model.embed_in
+    elif isinstance(model, MistralForCausalLM):
+        return model.model.embed_tokens
+    elif Qwen2ForCausalLM and isinstance(model, Qwen2ForCausalLM):
+        return model.model.embed_tokens
     else:
         raise ValueError(f"Unknown model type: {type(model)}")
 
@@ -45,6 +54,10 @@ def get_embedding_matrix(model):
         return model.model.embed_tokens.weight
     elif isinstance(model, GPTNeoXForCausalLM):
         return model.base_model.embed_in.weight
+    elif isinstance(model, MistralForCausalLM):
+        return model.model.embed_tokens.weight
+    elif Qwen2ForCausalLM and isinstance(model, Qwen2ForCausalLM):
+        return model.model.embed_tokens.weight
     else:
         raise ValueError(f"Unknown model type: {type(model)}")
 
@@ -55,6 +68,10 @@ def get_embeddings(model, input_ids):
         return model.model.embed_tokens(input_ids)
     elif isinstance(model, GPTNeoXForCausalLM):
         return model.base_model.embed_in(input_ids).half()
+    elif isinstance(model, MistralForCausalLM):
+        return model.model.embed_tokens(input_ids)
+    elif Qwen2ForCausalLM and isinstance(model, Qwen2ForCausalLM):
+        return model.model.embed_tokens(input_ids)
     else:
         raise ValueError(f"Unknown model type: {type(model)}")
 

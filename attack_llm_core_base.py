@@ -275,22 +275,13 @@ for i in range(num_steps):
         print("best_new_adv_suffix",best_new_adv_suffix)
         # Update the running adv_suffix with the best candidate
         adv_suffix = best_new_adv_suffix
-        if args.defense == 'smooth_llm':
-            check_input_ids = suffix_manager.get_input_ids(adv_string=adv_suffix).to(device)
-            full_prompt_text = tokenizer.decode(
-                check_input_ids[:suffix_manager._assistant_role_slice.stop],
-                skip_special_tokens=True
-            )
-            perturbable_prompt = f"{user_prompt} {adv_suffix}"
-            is_success, gen_str = check_for_attack_success_smooth(
-                smooth_llm_defense, full_prompt_text, perturbable_prompt, max_new_tokens=32
-            )
-        else:
-            is_success,gen_str = check_for_attack_success(model,
-                                                  tokenizer,
-                                                  suffix_manager.get_input_ids(adv_string=adv_suffix).to(device),
-                                                  suffix_manager._assistant_role_slice,
-                                                  test_prefixes)
+        
+        # Always optimize without defense (standard attack success check)
+        is_success,gen_str = check_for_attack_success(model,
+                                              tokenizer,
+                                              suffix_manager.get_input_ids(adv_string=adv_suffix).to(device),
+                                              suffix_manager._assistant_role_slice,
+                                              test_prefixes)
 
         log_entry = {
             "step": i,
@@ -357,3 +348,47 @@ if not log_json_file.parent.exists():
     log_json_file.parent.mkdir(parents=True)
 with open(str(log_json_file.absolute()), 'w') as f:
     json.dump(log_dict, f, indent=4)
+
+# Final evaluation with SmoothLLM defense if enabled
+if args.defense == 'smooth_llm' and smooth_llm_defense is not None:
+    print("\n" + "="*80)
+    print("FINAL EVALUATION: Testing optimized adversarial suffix with SmoothLLM defense")
+    print("="*80)
+    
+    check_input_ids = suffix_manager.get_input_ids(adv_string=adv_suffix).to(device)
+    full_prompt_text = tokenizer.decode(
+        check_input_ids[:suffix_manager._assistant_role_slice.stop],
+        skip_special_tokens=True
+    )
+    perturbable_prompt = f"{user_prompt} {adv_suffix}"
+    
+    defense_success, defense_gen_str = check_for_attack_success_smooth(
+        smooth_llm_defense, full_prompt_text, perturbable_prompt, max_new_tokens=32
+    )
+    
+    print(f"\nWithout Defense: {'SUCCESS' if is_success else 'FAILED'}")
+    print(f"With SmoothLLM Defense: {'JAILBROKEN' if defense_success else 'DEFENDED'}")
+    print(f"\nSmoothLLM Response: {defense_gen_str}")
+    print("="*80 + "\n")
+    
+    # Add defense evaluation to log
+    defense_log = {
+        "defense_type": "smooth_llm",
+        "smoothllm_config": {
+            "pert_type": args.smoothllm_pert_type,
+            "pert_pct": args.smoothllm_pert_pct,
+            "num_copies": args.smoothllm_num_copies
+        },
+        "final_adv_suffix": adv_suffix,
+        "attack_success_without_defense": is_success,
+        "attack_success_with_defense": defense_success,
+        "defense_response": defense_gen_str,
+        "defense_effectiveness": "Failed" if defense_success else "Successful"
+    }
+    
+    # Save defense evaluation
+    defense_json_file = pathlib.Path(f'{args.output_path}/defense_eval/result_{args.id}.json')
+    if not defense_json_file.parent.exists():
+        defense_json_file.parent.mkdir(parents=True)
+    with open(str(defense_json_file.absolute()), 'w') as f:
+        json.dump(defense_log, f, indent=4)
