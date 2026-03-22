@@ -16,6 +16,17 @@ parser.add_argument('--smoothllm_pert_type', type=str, default='RandomSwapPertur
 parser.add_argument('--smoothllm_pert_pct', type=int, default=10)
 parser.add_argument('--smoothllm_num_copies', type=int, default=10)
 parser.add_argument('--output_path', type=str, default=f'./output/{(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime("%Y%m%d-%H%M%S")}')
+parser.add_argument('--decoy_padding', action='store_true', default=False,
+    help='Enable EMA-momentum decoy padding to defeat SmoothLLM')
+parser.add_argument('--padding_pct', type=float, default=0.3,
+    help='Fraction of suffix token positions used as decoys (0.0-1.0)')
+parser.add_argument('--ema_alpha', type=float, default=0.9,
+    help='EMA decay factor for gradient momentum tracking')
+parser.add_argument('--decoy_update_freq', type=int, default=10,
+    help='Re-identify critical positions every N steps')
+parser.add_argument('--inertness_metric', type=str, default='char_length',
+    choices=['char_length', 'l2'],
+    help='Metric for selecting inert decoy tokens')
 
 
 args = parser.parse_args()
@@ -34,6 +45,7 @@ import torch.nn as nn
 import pathlib
 from llm_attacks.minimal_gcg.opt_utils import token_gradients, sample_control, get_logits, target_loss
 from llm_attacks.minimal_gcg.opt_utils import load_model_and_tokenizer, get_filtered_cands
+from llm_attacks.minimal_gcg.opt_utils import find_inert_tokens, place_decoys_around_critical
 from llm_attacks.minimal_gcg.string_utils import SuffixManager, load_conversation_template
 from llm_attacks import get_nonascii_toks
 
@@ -211,6 +223,21 @@ if args.defense == 'smooth_llm':
 
 not_allowed_tokens = None if allow_non_ascii else get_nonascii_toks(tokenizer)
 adv_suffix = adv_string_init
+
+# Build ASCII token list for decoy selection
+ascii_tok_ids = torch.tensor(
+    [i for i in range(3, tokenizer.vocab_size)
+     if tokenizer.decode([i]).isascii() and tokenizer.decode([i]).isprintable()],
+    device=device
+)
+
+# EMA momentum state and decoy state (initialized after suffix_manager is set up)
+_init_ids = suffix_manager.get_input_ids(adv_string=adv_suffix)
+num_suffix_tokens = len(_init_ids[suffix_manager._control_slice])
+ema_importance = torch.zeros(num_suffix_tokens, device=device)
+decoy_positions = []
+decoy_tok_ids = None
+
 generations = {}
 generations[user_prompt] = []
 log_dict = []
@@ -230,6 +257,42 @@ for i in range(num_steps):
                                       suffix_manager._target_slice,
                                       suffix_manager._loss_slice)
 
+    # Step 2.5 EMA momentum update for gradient importance tracking
+    with torch.no_grad():
+        pos_importance = coordinate_grad.norm(dim=-1).detach()
+    ema_importance = args.ema_alpha * ema_importance + (1 - args.ema_alpha) * pos_importance
+
+    # Step 2.6 Decoy position re-assignment (every decoy_update_freq steps)
+    if args.decoy_padding and i % args.decoy_update_freq == 0:
+        num_decoys = max(0, int(num_suffix_tokens * args.padding_pct))
+        num_critical = num_suffix_tokens - num_decoys
+
+        critical_indices = ema_importance.topk(num_critical).indices
+        critical_mask = torch.zeros(num_suffix_tokens, dtype=torch.bool, device=device)
+        critical_mask[critical_indices] = True
+
+        decoy_positions = place_decoys_around_critical(critical_mask, num_suffix_tokens, num_decoys)
+
+        decoy_tok_ids = find_inert_tokens(
+            tokenizer, ascii_tok_ids,
+            num_positions=len(decoy_positions),
+            inertness_metric=args.inertness_metric,
+            coordinate_grad=coordinate_grad if args.inertness_metric == 'l2' else None
+        ).to(device)
+
+        # Patch the current suffix tokens at decoy positions
+        adv_suffix_tokens_tmp = input_ids[suffix_manager._control_slice].clone()
+        if len(decoy_positions) > 0:
+            decoy_idx = torch.tensor(decoy_positions, device=device)
+            adv_suffix_tokens_tmp[decoy_idx] = decoy_tok_ids
+            adv_suffix = tokenizer.decode(adv_suffix_tokens_tmp, skip_special_tokens=True)
+            # Re-encode to get fresh input_ids with patched decoys
+            input_ids = suffix_manager.get_input_ids(adv_string=adv_suffix).to(device)
+
+        critical_pct = 100 * num_critical / num_suffix_tokens
+        print(f'[Decoy] Step {i}: {num_critical} critical ({critical_pct:.0f}%), '
+              f'{len(decoy_positions)} decoy positions')
+
     # Step 3. Sample a batch of new tokens based on the coordinate gradient.
     # Notice that we only need the one that minimizes the loss.
     with torch.no_grad():
@@ -243,7 +306,8 @@ for i in range(num_steps):
                                              batch_size,
                                              topk=topk,
                                              temp=1,
-                                             not_allowed_tokens=not_allowed_tokens)
+                                             not_allowed_tokens=not_allowed_tokens,
+                                             frozen_positions=decoy_positions if args.decoy_padding else None)
         # if i ==0:
         #     print(a)
         # Step 3.3 This step ensures all adversarial candidates have the same number of tokens.
@@ -287,11 +351,13 @@ for i in range(num_steps):
             "step": i,
             "loss": str(current_loss.detach().cpu().numpy()),
             "batch_size": batch_size,
-            "top_k":topk,
+            "top_k": topk,
             "user_prompt": user_prompt,
             "adv_suffix": best_new_adv_suffix,
             "gen_str": gen_str,
             "is_success": is_success,
+            "decoy_positions": decoy_positions if args.decoy_padding else [],
+            "ema_importance_top3": ema_importance.topk(3).indices.tolist() if args.decoy_padding else [],
         }
         log_dict.append(log_entry)
 

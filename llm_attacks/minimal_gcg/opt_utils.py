@@ -69,7 +69,8 @@ def token_gradients(model, input_ids, input_slice, target_slice, loss_slice):
     
     return grad
 
-def sample_control(control_toks, grad, batch_size, topk=256, temp=1, not_allowed_tokens=None):
+def sample_control(control_toks, grad, batch_size, topk=256, temp=1, not_allowed_tokens=None,
+                   frozen_positions=None):
 
     if not_allowed_tokens is not None:
         grad[:, not_allowed_tokens.to(grad.device)] = np.inf
@@ -79,19 +80,73 @@ def sample_control(control_toks, grad, batch_size, topk=256, temp=1, not_allowed
 
     original_control_toks = control_toks.repeat(batch_size, 1)
     new_token_pos = torch.arange(
-        0, 
-        len(control_toks), 
+        0,
+        len(control_toks),
         len(control_toks) / batch_size,
         device=grad.device
     ).type(torch.int64)
     new_token_val = torch.gather(
-        top_indices[new_token_pos], 1, 
+        top_indices[new_token_pos], 1,
         torch.randint(0, topk, (batch_size, 1),
         device=grad.device)
     )
     new_control_toks = original_control_toks.scatter_(1, new_token_pos.unsqueeze(-1), new_token_val)
 
+    # Restore frozen (decoy) positions to their original token values
+    if frozen_positions is not None and len(frozen_positions) > 0:
+        frozen = torch.tensor(frozen_positions, device=new_control_toks.device)
+        new_control_toks[:, frozen] = control_toks[frozen].unsqueeze(0)
+
     return new_control_toks
+
+
+def find_inert_tokens(tokenizer, ascii_tok_ids, num_positions,
+                      inertness_metric='char_length', coordinate_grad=None):
+    """
+    Returns tensor of shape [num_positions] with inert token IDs for each position.
+
+    ascii_tok_ids: 1D tensor of allowed (ASCII) token IDs
+    inertness_metric: 'char_length' ranks by token string length (longer = more absorption);
+                      'l2' picks the ASCII token with minimum absolute gradient at each position.
+    """
+    if inertness_metric == 'char_length':
+        lengths = [(tok_id.item(), len(tokenizer.decode([tok_id.item()])))
+                   for tok_id in ascii_tok_ids]
+        lengths.sort(key=lambda x: -x[1])
+        top_n = [tok_id for tok_id, _ in lengths[:max(1, len(lengths) // 4)]]
+        return torch.tensor([random.choice(top_n) for _ in range(num_positions)])
+    elif inertness_metric == 'l2':
+        assert coordinate_grad is not None, "coordinate_grad required for 'l2' metric"
+        ascii_ids = ascii_tok_ids.to(coordinate_grad.device)
+        inert_ids = []
+        for pos in range(num_positions):
+            pos_grad = coordinate_grad[pos][ascii_ids]
+            best_local = ascii_ids[pos_grad.abs().argmin()]
+            inert_ids.append(best_local.item())
+        return torch.tensor(inert_ids)
+    else:
+        raise ValueError(f"Unknown inertness_metric: {inertness_metric}")
+
+
+def place_decoys_around_critical(critical_mask, suffix_length, num_decoys):
+    """
+    Returns list of position indices to use as decoys.
+    Prioritizes positions immediately adjacent to critical positions.
+
+    critical_mask: bool tensor of length suffix_length, True = critical position
+    """
+    adjacent, non_adjacent = [], []
+    for pos in range(suffix_length):
+        if critical_mask[pos]:
+            continue
+        is_adjacent = (
+            (pos > 0 and critical_mask[pos - 1]) or
+            (pos < suffix_length - 1 and critical_mask[pos + 1])
+        )
+        (adjacent if is_adjacent else non_adjacent).append(pos)
+
+    candidates = adjacent + non_adjacent
+    return candidates[:num_decoys]
 
 
 # def get_filtered_cands(tokenizer, control_cand, filter_cand=True, curr_control=None):
