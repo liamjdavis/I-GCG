@@ -254,6 +254,13 @@ for i in range(num_steps):
     input_ids = suffix_manager.get_input_ids(adv_string=adv_suffix)
     input_ids = input_ids.to(device)
 
+    # Re-apply active decoy patches directly — avoids tokenization round-trip mismatch
+    # that would change _control_slice length and cause gather OOB in sample_control.
+    if args.decoy_padding and decoy_tok_ids is not None and len(decoy_positions) > 0:
+        _decoy_idx = torch.tensor(decoy_positions, device=device)
+        input_ids = input_ids.clone()
+        input_ids[suffix_manager._control_slice.start + _decoy_idx] = decoy_tok_ids
+
     # Step 2. Compute Coordinate Gradient
     coordinate_grad = token_gradients(model,
                                       input_ids,
@@ -284,14 +291,12 @@ for i in range(num_steps):
             coordinate_grad=coordinate_grad if args.inertness_metric == 'l2' else None
         ).to(device)
 
-        # Patch the current suffix tokens at decoy positions
-        adv_suffix_tokens_tmp = input_ids[suffix_manager._control_slice].clone()
+        # Apply new decoy tokens directly — no decode/re-encode to avoid
+        # tokenization mismatch that changes _control_slice length.
         if len(decoy_positions) > 0:
-            decoy_idx = torch.tensor(decoy_positions, device=device)
-            adv_suffix_tokens_tmp[decoy_idx] = decoy_tok_ids
-            adv_suffix = tokenizer.decode(adv_suffix_tokens_tmp, skip_special_tokens=True)
-            # Re-encode to get fresh input_ids with patched decoys
-            input_ids = suffix_manager.get_input_ids(adv_string=adv_suffix).to(device)
+            _decoy_idx = torch.tensor(decoy_positions, device=device)
+            input_ids = input_ids.clone()
+            input_ids[suffix_manager._control_slice.start + _decoy_idx] = decoy_tok_ids
 
         critical_pct = 100 * num_critical / num_suffix_tokens
         print(f'[Decoy] Step {i}: {num_critical} critical ({critical_pct:.0f}%), '
