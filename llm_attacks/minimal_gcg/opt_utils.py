@@ -118,6 +118,10 @@ def find_inert_tokens(tokenizer, ascii_tok_ids, num_positions,
     elif inertness_metric == 'l2':
         assert coordinate_grad is not None, "coordinate_grad required for 'l2' metric"
         ascii_ids = ascii_tok_ids.to(coordinate_grad.device)
+        # Clip to the embedding vocab dimension — tokenizer.vocab_size can exceed
+        # embed_weights.shape[0] for models like Qwen2 (e.g. 152064 vs 151936)
+        vocab_dim = coordinate_grad.shape[1]
+        ascii_ids = ascii_ids[ascii_ids < vocab_dim]
         inert_ids = []
         for pos in range(num_positions):
             pos_grad = coordinate_grad[pos][ascii_ids]

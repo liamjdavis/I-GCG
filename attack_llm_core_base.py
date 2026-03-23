@@ -224,9 +224,13 @@ if args.defense == 'smooth_llm':
 not_allowed_tokens = None if allow_non_ascii else get_nonascii_toks(tokenizer)
 adv_suffix = adv_string_init
 
-# Build ASCII token list for decoy selection
+# Build ASCII token list for decoy selection.
+# Use the embedding matrix size as the upper bound — tokenizer.vocab_size can exceed
+# embed_weights.shape[0] for models like Qwen2, which would cause out-of-bounds
+# indexing in both token_gradients (scatter_) and find_inert_tokens (l2 gather).
+_embed_vocab_size = model.get_input_embeddings().weight.shape[0]
 ascii_tok_ids = torch.tensor(
-    [i for i in range(3, tokenizer.vocab_size)
+    [i for i in range(3, min(tokenizer.vocab_size, _embed_vocab_size))
      if tokenizer.decode([i]).isascii() and tokenizer.decode([i]).isprintable()],
     device=device
 )
