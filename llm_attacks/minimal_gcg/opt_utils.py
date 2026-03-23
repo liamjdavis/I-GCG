@@ -110,6 +110,8 @@ def find_inert_tokens(tokenizer, ascii_tok_ids, num_positions,
                       'l2' picks the ASCII token with minimum absolute gradient at each position.
     """
     if inertness_metric == 'char_length':
+        if len(ascii_tok_ids) == 0:
+            raise ValueError("ascii_tok_ids is empty — no printable ASCII tokens available")
         lengths = [(tok_id.item(), len(tokenizer.decode([tok_id.item()])))
                    for tok_id in ascii_tok_ids]
         lengths.sort(key=lambda x: -x[1])
@@ -122,6 +124,11 @@ def find_inert_tokens(tokenizer, ascii_tok_ids, num_positions,
         # embed_weights.shape[0] for models like Qwen2 (e.g. 152064 vs 151936)
         vocab_dim = coordinate_grad.shape[1]
         ascii_ids = ascii_ids[ascii_ids < vocab_dim]
+        if len(ascii_ids) == 0:
+            raise ValueError(
+                f"No ASCII token IDs fall within the model embedding dimension ({vocab_dim}). "
+                "Check that ascii_tok_ids was built with the embedding size as the upper bound."
+            )
         inert_ids = []
         for pos in range(num_positions):
             pos_grad = coordinate_grad[pos][ascii_ids]

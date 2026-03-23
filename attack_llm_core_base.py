@@ -269,6 +269,20 @@ for i in range(num_steps):
                                       suffix_manager._loss_slice)
 
     # Step 2.5 EMA momentum update for gradient importance tracking
+    # Suffix length can drift between iterations when a decoded candidate re-tokenizes
+    # to a different length in context (BPE context-sensitivity). Resize EMA state
+    # to match the actual gradient shape and invalidate stale decoy assignments.
+    actual_suffix_len = coordinate_grad.shape[0]
+    if actual_suffix_len != num_suffix_tokens:
+        if actual_suffix_len > num_suffix_tokens:
+            pad = torch.zeros(actual_suffix_len - num_suffix_tokens, device=device)
+            ema_importance = torch.cat([ema_importance, pad])
+        else:
+            ema_importance = ema_importance[:actual_suffix_len]
+        num_suffix_tokens = actual_suffix_len
+        decoy_positions = []
+        decoy_tok_ids = None
+
     with torch.no_grad():
         pos_importance = coordinate_grad.norm(dim=-1).detach()
     ema_importance = args.ema_alpha * ema_importance + (1 - args.ema_alpha) * pos_importance
