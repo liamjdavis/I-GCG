@@ -31,7 +31,8 @@ CYBER_CONFIG ?= data/cyber_behaviors.json
         transfer-experiment transfer-experiment-dry \
         slotgcg-experiment slotgcg-experiment-dry \
         target-ablation target-ablation-quick target-ablation-dry \
-        fc-scaled fc-scaled-quick fc-scaled-dry
+        fc-scaled fc-scaled-quick fc-scaled-dry \
+        fcd-report fcd-report-quick fcd-report-dry
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -251,6 +252,25 @@ fcd-scaled-quick: ## F-C+D hybrid on 5 behaviors x 200 steps (~1 h)
 
 fcd-scaled-dry: ## Dry-run F-C+D (1 behaviour, 5 steps)
 	python scripts/fcd_scaled_experiment.py \
+		--model_path $(MODEL_PATH) \
+		--device $(DEVICE) \
+		--dry_run
+
+# ── F-C+D Attack Report ─────────────────────────────────────────────────
+
+fcd-report: ## F-C+D on 40 behaviors + formatted .txt report (~12 h on A100)
+	python scripts/fcd_attack_report.py \
+		--model_path $(MODEL_PATH) \
+		--device $(DEVICE)
+
+fcd-report-quick: ## F-C+D report on 5 behaviors x 200 steps (~1 h)
+	python scripts/fcd_attack_report.py \
+		--model_path $(MODEL_PATH) \
+		--device $(DEVICE) \
+		--quick
+
+fcd-report-dry: ## Dry-run F-C+D report (1 behaviour, 5 steps)
+	python scripts/fcd_attack_report.py \
 		--model_path $(MODEL_PATH) \
 		--device $(DEVICE) \
 		--dry_run
