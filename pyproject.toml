@@ -15,12 +15,20 @@ dependencies = [
     "openai",
     "pandas",
     "PyYAML",
+    "scipy",
+    "sentence-transformers",
     "sentencepiece",
     "tokenizers",
     "torch",
     "torchvision",
     "tqdm",
     "transformers",
+]
+
+[project.optional-dependencies]
+geometry = [
+    "mauve-text",
+    "strong-reject",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,11 +1,15 @@
 accelerate
 fschat
 matplotlib
+mauve-text
 numpy
 openai
 pandas
 PyYAML
+scipy
+sentence-transformers
 sentencepiece
+strong-reject
 tokenizers
 torch
 torchvision

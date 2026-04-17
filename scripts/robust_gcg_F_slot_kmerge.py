@@ -523,7 +523,11 @@ class SlotAttackRunner:
         }
         self.logger.log_summary(args.id, summary)
 
-        plot_run_results(self.logger.log_dir)
+        if not getattr(args, "skip_plots", False):
+            try:
+                plot_run_results(self.logger.log_dir)
+            except ImportError as e:
+                print(f"  [plot] skipped — {e}")
 
         smooth_results = {k: v["jailbroken"] for k, v in sweep.items()}
         print(
@@ -558,6 +562,8 @@ def run_slot_attack_with_model(
     merged = {**_DEFAULT_PARAMS, **params}
     if skip_smoothllm:
         merged["skip_smoothllm"] = True
+    if skip_plots:
+        merged["skip_plots"] = True
     args = argparse.Namespace(**merged)
 
     np.random.seed(args.seed)
@@ -569,12 +575,7 @@ def run_slot_attack_with_model(
         args.output_path = f"output/robust_eval/F_slot_kmerge/{ts}"
 
     runner = SlotAttackRunner(args, model, tokenizer, hooks=hooks)
-    summary = runner.run()
-
-    if skip_plots:
-        pass  # plots already generated inside run() — could skip if needed
-
-    return summary
+    return runner.run()
 
 
 # ---------------------------------------------------------------------------

@@ -32,7 +32,9 @@ CYBER_CONFIG ?= data/cyber_behaviors.json
         slotgcg-experiment slotgcg-experiment-dry \
         target-ablation target-ablation-quick target-ablation-dry \
         fc-scaled fc-scaled-quick fc-scaled-dry \
-        fcd-report fcd-report-quick fcd-report-dry
+        fcd-report fcd-report-quick fcd-report-dry \
+        gold-completions gold-completions-smoke \
+        geometry-smoke geometry-full geometry-full-quick geometry-full-dry geometry-offline
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -299,3 +301,36 @@ tmux-run: ## Start a tmux session and run attack-all inside it
 
 vram: ## Show live VRAM usage
 	@watch -n 1 nvidia-smi
+
+# ── Gold Completions (abliterated model) ─────────────────────────────────
+
+gold-completions: ## Generate 100 gold completions per behavior (~2-3 h on A100)
+	python scripts/generate_gold_completions.py \
+		--abliterated_model huihui-ai/Qwen2.5-7B-Instruct-abliterated-v3 \
+		--behaviors_config data/cyber_behaviors_v2_all40.json \
+		--n_samples 100 --device $(DEVICE)
+
+gold-completions-smoke: ## Generate 10 gold completions for 9 diverse BIDs (~10 min)
+	python scripts/generate_gold_smoke.py --device $(DEVICE)
+
+# ── Geometry Evaluation ──────────────────────────────────────────────────
+
+geometry-smoke: ## Geometry smoke test: 3 BIDs, 5 steps, 3 conditions (~15 min)
+	python scripts/geometry_eval_smoke.py \
+		--model_path $(MODEL_PATH) --device $(DEVICE)
+
+geometry-full: ## Full geometry eval: 40 BIDs, 500 steps, 3 conditions (~36 h)
+	python scripts/geometry_eval_full.py \
+		--model_path $(MODEL_PATH) --device $(DEVICE)
+
+geometry-full-quick: ## Quick geometry eval: 5 BIDs, 200 steps (~3 h)
+	python scripts/geometry_eval_full.py \
+		--model_path $(MODEL_PATH) --device $(DEVICE) --quick
+
+geometry-full-dry: ## Dry-run geometry eval: 1 BID, 5 steps
+	python scripts/geometry_eval_full.py \
+		--model_path $(MODEL_PATH) --device $(DEVICE) --dry_run
+
+geometry-offline: ## Offline re-score existing F-C+D results (~30 min)
+	python scripts/geometry_eval_offline.py \
+		--model_path $(MODEL_PATH) --device $(DEVICE)

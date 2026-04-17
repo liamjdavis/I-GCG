@@ -78,6 +78,9 @@ def build_parser(method_name: str) -> argparse.ArgumentParser:
     parser.add_argument("--warm_start_steps", type=int, default=50)
     parser.add_argument("--n_flips", type=int, default=1,
                         help="Token positions flipped per candidate (1=standard GCG)")
+    parser.add_argument("--eval_batch_size", type=int, default=64,
+                        help="Micro-batch size for candidate forward pass "
+                             "(reduce if VRAM spills on <=24GB GPUs)")
     # Scaffold
     parser.add_argument("--use_scaffold", action="store_true")
     # Token robustness (Script B/D)
@@ -282,7 +285,8 @@ def run_attack(
                 input_ids=input_ids,
                 control_slice=suffix_manager._control_slice,
                 test_controls=new_adv_suffix,
-                return_ids=True, batch_size=512,
+                return_ids=True,
+                batch_size=getattr(args, "eval_batch_size", 64),
             )
             clean_losses = target_loss(logits, ids, suffix_manager._target_slice)
 
@@ -408,6 +412,7 @@ _DEFAULT_PARAMS: Dict[str, Any] = {
     "seed": 235711,
     "buffer_token_id": None,
     "n_flips": 1,
+    "eval_batch_size": 64,
 }
 
 
@@ -529,7 +534,8 @@ def run_attack_with_model(
                 input_ids=input_ids,
                 control_slice=suffix_manager._control_slice,
                 test_controls=new_adv_suffix,
-                return_ids=True, batch_size=512,
+                return_ids=True,
+                batch_size=getattr(args, "eval_batch_size", 64),
             )
             clean_losses = target_loss(logits, ids, suffix_manager._target_slice)
 
